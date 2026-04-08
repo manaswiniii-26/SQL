@@ -1,2 +1,3 @@
-pandas
 streamlit
+mysql-connector-python
+pandas
