@@ -5,45 +5,48 @@ import os
 import re
 
 st.set_page_config(page_title="StreamPulse Analytics", layout="wide")
-st.title("StreamPulse Analytics Dashboard")
+
+# Custom CSS to make it look less "bland"
+st.markdown("""
+    <style>
+    .main { background-color: #f5f7f9; }
+    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+    </style>
+    """, unsafe_all_white_space=True)
+
+st.title("📊 StreamPulse Analytics")
 
 DB_FILE = 'streampulse.db'
 SQL_FILE = 'StreamPulse.sql'
 
 def init_db():
-    # If the database already exists and is empty/broken, we recreate it
     if os.path.exists(DB_FILE):
         os.remove(DB_FILE)
-        
+    
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
     if os.path.exists(SQL_FILE):
         with open(SQL_FILE, 'r') as f:
-            sql_script = f.read()
-        
-        # 1. Remove MySQL-specific headers
-        sql_script = sql_script.replace('show databases;', '')
-        sql_script = sql_script.replace('use  Streampulse;', '')
-        
-        # 2. Convert common MySQL syntax to SQLite compatible syntax
-        # SQLite prefers AUTOINCREMENT or just PRIMARY KEY for INT
-        sql_script = re.sub(r'INT PRIMARY KEY', 'INTEGER PRIMARY KEY', sql_script, flags=re.IGNORECASE)
-        # Remove any remaining SELECT statements at the end of your file that aren't inserts
-        sql_script = re.sub(r'SELECT .*?;', '', sql_script, flags=re.DOTALL | re.IGNORECASE)
+            # Filter out MySQL-specific lines that break SQLite
+            lines = f.readlines()
+            clean_lines = []
+            for line in lines:
+                # Remove SET, USE, SHOW, and comments starting with /*!
+                if not any(line.strip().upper().startswith(x) for x in ["SET ", "USE ", "SHOW ", "/*"]):
+                    clean_lines.append(line)
+            
+            sql_script = "".join(clean_lines)
+            # Standardize Integer Primary Key for SQLite
+            sql_script = re.sub(r'INT PRIMARY KEY', 'INTEGER PRIMARY KEY', sql_script, flags=re.IGNORECASE)
 
         try:
-            # Execute the entire script to build User_Account, Media_Content, etc.
             cursor.executescript(sql_script)
             conn.commit()
-            st.success("Database initialized successfully from StreamPulse.sql!")
         except Exception as e:
-            st.error(f"Error during initialization: {e}")
-    else:
-        st.error("SQL file not found in repository.")
+            st.error(f"Initialization Note: {e}")
     conn.close()
 
-# Force initialization on the first run
 if 'db_initialized' not in st.session_state:
     init_db()
     st.session_state['db_initialized'] = True
@@ -52,25 +55,58 @@ def run_query(query):
     try:
         with sqlite3.connect(DB_FILE) as conn:
             return pd.read_sql_query(query, conn)
-    except Exception as e:
+    except:
         return None
 
-# --- UI SECTIONS ---
+# --- RESTORING FUNCTIONS: THE DASHBOARD ---
 
-# Section 1: Media Catalog
-st.subheader("Master Media Catalog")
-# Queries Media_Content table defined in your SQL
-media_df = run_query("SELECT Title, Release_Year, Content_Type FROM Media_Content LIMIT 10")
+# 1. Top Level Metrics (KPIs)
+col1, col2, col3, col4 = st.columns(4)
+total_movies = run_query("SELECT COUNT(*) as count FROM Media_Content")
+total_users = run_query("SELECT COUNT(*) as count FROM User_Account")
+total_studios = run_query("SELECT COUNT(*) as count FROM Production_House")
+active_engine = run_query("SELECT Version FROM Rec_Engine ORDER BY EngineID DESC LIMIT 1")
 
-if media_df is not None and not media_df.empty:
-    st.dataframe(media_df, use_container_width=True)
-else:
-    st.warning("Media_Content table is currently empty or not found.")
+with col1:
+    st.metric("Total Titles", total_movies['count'][0] if total_movies is not None else 0)
+with col2:
+    st.metric("Global Users", total_users['count'][0] if total_users is not None else 0)
+with col3:
+    st.metric("Partner Studios", total_studios['count'][0] if total_studios is not None else 0)
+with col4:
+    st.metric("Engine Version", active_engine['Version'][0] if active_engine is not None else "N/A")
 
-# Section 2: User Analytics
-st.subheader("User Distribution by City")
-# Queries User_Account table defined in your SQL
-user_stats = run_query("SELECT City, COUNT(*) as Count FROM User_Account GROUP BY City")
+# 2. Main Content Area
+tab1, tab2, tab3 = st.tabs(["Media Catalog", "User Insights", "Technical Infrastructure"])
 
-if user_stats is not None and not user_stats.empty:
-    st.bar_chart(user_stats.set_index('City'))
+with tab1:
+    st.subheader("Master Media Catalog")
+    search = st.text_input("Search by Title...")
+    query = "SELECT Title, Release_Year, Content_Type FROM Media_Content"
+    if search:
+        query += f" WHERE Title LIKE '%{search}%'"
+    
+    df_media = run_query(query)
+    if df_media is not None:
+        st.dataframe(df_media, use_container_width=True)
+
+with tab2:
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.write("### Users by City")
+        df_users = run_query("SELECT City, COUNT(*) as Count FROM User_Account GROUP BY City")
+        if df_users is not None:
+            st.bar_chart(df_users.set_index('City'))
+    
+    with col_b:
+        st.write("### Content Distribution")
+        df_dist = run_query("SELECT Content_Type, COUNT(*) as Count FROM Media_Content GROUP BY Content_Type")
+        if df_dist is not None:
+            st.area_chart(df_dist.set_index('Content_Type'))
+
+with tab3:
+    st.subheader("System & Server Status")
+    # Pulling from your CDN_Server table
+    df_cdn = run_query("SELECT Region, IP_Address, Storage_Capacity_TB FROM CDN_Server")
+    if df_cdn is not None:
+        st.table(df_cdn)
