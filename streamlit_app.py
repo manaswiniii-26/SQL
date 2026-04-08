@@ -1,29 +1,55 @@
 import streamlit as st
 import pandas as pd
 import sqlite3
+import os
 
 st.set_page_config(page_title="StreamPulse Analytics", layout="wide")
 st.title("StreamPulse Analytics Dashboard")
 
-# Function to connect and run queries
+# 1. Database Setup Logic
+DB_FILE = 'streampulse.db'
+SQL_FILE = 'StreamPulse.sql'
+
+def init_db():
+    # Only create the database if it doesn't exist
+    if not os.path.exists(DB_FILE):
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        if os.path.exists(SQL_FILE):
+            with open(SQL_FILE, 'r') as f:
+                sql_script = f.read()
+            # Clean MySQL-specific commands that SQLite doesn't understand
+            clean_script = sql_script.replace('show databases;', '').replace('use  Streampulse;', '')
+            try:
+                cursor.executescript(clean_script)
+                conn.commit()
+            except Exception as e:
+                st.error(f"Error initializing database: {e}")
+        conn.close()
+
+# Initialize the database
+init_db()
+
+# 2. Query Function
 def run_query(query):
-    conn = sqlite3.connect('streampulse.db')
-    return pd.read_sql_query(query, conn)
+    try:
+        with sqlite3.connect(DB_FILE) as conn:
+            return pd.read_sql_query(query, conn)
+    except Exception as e:
+        st.error(f"Query Error: {e}")
+        return pd.DataFrame()
 
-# Display content from your SQL tables
+# 3. UI Sections
 st.subheader("Master Media Catalog")
-# Pulling Title and Release Year from your Media_Content table
 media_df = run_query("SELECT Title, Release_Year, Content_Type FROM Media_Content LIMIT 10")
-st.dataframe(media_df, use_container_width=True)
 
-# Visualize user data from your SQL table
+if not media_df.empty:
+    st.dataframe(media_df, use_container_width=True)
+else:
+    st.warning("No data found. Please check if Media_Content table exists in your SQL file.")
+
+# User Distribution
 st.subheader("User Distribution by City")
-# Using the City column from your User_Account table
 user_stats = run_query("SELECT City, COUNT(*) as Count FROM User_Account GROUP BY City")
-st.bar_chart(user_stats.set_index('City'))
-
-# Check Recommendation Engine status
-st.sidebar.header("System Status")
-# Pulling Version information from your Rec_Engine table
-engine_info = run_query("SELECT Version, Model_Type FROM Rec_Engine WHERE EngineID = 50")
-st.sidebar.write(f"Active Engine: {engine_info['Model_Type'][0]} ({engine_info['Version'][0]})")
+if not user_stats.empty:
+    st.bar_chart(user_stats.set_index('City'))
